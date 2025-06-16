@@ -1,67 +1,51 @@
 from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from pydantic import BaseModel
+from pytube import YouTube
+import os
+import uuid
 import yt_dlp
-import io
 
 app = FastAPI()
 
-# CORS setup: allow your frontend domain here
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://frontend-9wkj.vercel.app"],  # Replace with your actual frontend domain
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+DOWNLOAD_DIR = "downloads"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+class DownloadRequest(BaseModel):
+    url: str
+    type: str
 
 @app.post("/download")
-async def download_video(request: Request):
+async def download_video(req: DownloadRequest):
     try:
-        data = await request.json()
-        url = data.get("url")
-        format_type = data.get("format", "mp4")
+        url = req.url
+        mode = req.type.lower()
+        filename = f"{uuid.uuid4()}.mp4" if mode == "video" else f"{uuid.uuid4()}.mp3"
+        output_path = os.path.join(DOWNLOAD_DIR, filename)
 
-        if not url:
-            return JSONResponse(status_code=400, content={"error": "URL is required"})
+        if "instagram.com" in url or "youtu" in url:
+            ydl_opts = {
+                'format': 'bestaudio/best' if mode == 'audio' else 'best',
+                'outtmpl': output_path,
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }] if mode == 'audio' else []
+            }
 
-        buffer = io.BytesIO()
-
-        # Options for yt-dlp
-        ydl_opts = {
-            "format": "bestaudio/best" if format_type == "mp3" else "bestvideo+bestaudio/best",
-            "outtmpl": "-",
-            "quiet": True,
-            "noplaylist": True,
-            "prefer_ffmpeg": True,
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            }] if format_type == "mp3" else [],
-        }
-
-        def download():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                result = ydl.download([url])
-        
-        # Actually perform the download into the buffer
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            title = info.get('title', 'video')
-            ext = 'mp3' if format_type == 'mp3' else 'mp4'
-            filename = f"{title}.{ext}"
+                ydl.download([url])
 
-            ydl.download([url])
-            stream = open(filename, "rb")
-
-            return StreamingResponse(
-                stream,
-                media_type="audio/mpeg" if format_type == "mp3" else "video/mp4",
-                headers={"Content-Disposition": f"attachment; filename={filename}"}
-            )
-
-        return download()
-
+            return JSONResponse({"success": True, "download_url": f"/file/{filename}"})
+        else:
+            return JSONResponse({"success": False, "error": "Unsupported platform"})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse({"success": False, "error": str(e)})
+
+@app.get("/file/{filename}")
+async def serve_file(filename: str):
+    file_path = os.path.join(DOWNLOAD_DIR, filename)
+    if os.path.exists(file_path):
+        return FileResponse(file_path, media_type='application/octet-stream', filename=filename)
+    return JSONResponse({"success": False, "error": "File not found"})
