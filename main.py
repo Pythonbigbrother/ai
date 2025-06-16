@@ -1,61 +1,75 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pytube import YouTube
+import instaloader
 import os
 import uuid
-import yt_dlp
+import traceback
 
 app = FastAPI()
 
-DOWNLOAD_DIR = "downloads"
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-
-class DownloadRequest(BaseModel):
-    url: str
-    type: str
-
-@app.post("/download")
-async def download_video(req: DownloadRequest):
-    try:
-        url = req.url
-        mode = req.type.lower()
-        filename = f"{uuid.uuid4()}.mp4" if mode == "video" else f"{uuid.uuid4()}.mp3"
-        output_path = os.path.join(DOWNLOAD_DIR, filename)
-
-        if "instagram.com" in url or "youtu" in url:
-            ydl_opts = {
-                'format': 'bestaudio/best' if mode == 'audio' else 'best',
-                'outtmpl': output_path,
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }] if mode == 'audio' else []
-            }
-
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-
-            return JSONResponse({"success": True, "download_url": f"/file/{filename}"})
-        else:
-            return JSONResponse({"success": False, "error": "Unsupported platform"})
-    except Exception as e:
-        return JSONResponse({"success": False, "error": str(e)})
-
-@app.get("/file/{filename}")
-async def serve_file(filename: str):
-    file_path = os.path.join(DOWNLOAD_DIR, filename)
-    if os.path.exists(file_path):
-        return FileResponse(file_path, media_type='application/octet-stream', filename=filename)
-    return JSONResponse({"success": False, "error": "File not found"})
-
-from fastapi.middleware.cors import CORSMiddleware
-
+# ✅ Add CORS middleware to allow frontend access
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://www.blueberryultra.com"],  # or ["https://www.blueberryultra.com"]
+    allow_origins=["*"],  # Change to your domain for security
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 📦 Download request model
+class DownloadRequest(BaseModel):
+    url: str
+    type: str  # "video", "audio", or "playlist"
+
+# 🔽 YouTube video/audio downloader
+def download_youtube(url: str, type_: str) -> str:
+    yt = YouTube(url)
+    if type_ == "audio":
+        stream = yt.streams.filter(only_audio=True).first()
+        ext = ".mp3"
+    else:
+        stream = yt.streams.filter(progressive=True, file_extension="mp4").order_by("resolution").desc().first()
+        ext = ".mp4"
+
+    if not stream:
+        raise Exception("No suitable stream found")
+
+    filename = f"{uuid.uuid4()}{ext}"
+    path = os.path.join("downloads", filename)
+    os.makedirs("downloads", exist_ok=True)
+    stream.download(output_path="downloads", filename=filename)
+    return f"/files/{filename}"
+
+# 🔽 Instagram downloader
+def download_instagram(url: str) -> str:
+    shortcode = url.strip("/").split("/")[-1]
+    loader = instaloader.Instaloader(dirname_pattern="downloads")
+    post = instaloader.Post.from_shortcode(loader.context, shortcode)
+    loader.download_post(post, target=shortcode)
+    return f"/downloads/{shortcode}"
+
+# 🎯 Main API endpoint
+@app.post("/download")
+async def download(req: DownloadRequest):
+    try:
+        if "youtube.com" in req.url or "youtu.be" in req.url:
+            file_path = download_youtube(req.url, req.type)
+            public_url = f"https://ai-ai-9a7b.up.railway.app{file_path}"
+            return {"success": True, "download_url": public_url}
+        elif "instagram.com" in req.url:
+            file_path = download_instagram(req.url)
+            return {"success": True, "download_url": file_path}
+        else:
+            return {"success": False, "error": "Unsupported URL"}
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "trace": traceback.format_exc()
+        }
+
+# 🔗 Serve downloaded files
+from fastapi.staticfiles import StaticFiles
+app.mount("/files", StaticFiles(directory="downloads"), name="files")
