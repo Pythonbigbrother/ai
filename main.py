@@ -49,3 +49,13 @@ async def serve_file(filename: str):
     if os.path.exists(file_path):
         return FileResponse(file_path, media_type='application/octet-stream', filename=filename)
     return JSONResponse({"success": False, "error": "File not found"})
+
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://www.blueberryultra.com"],  # or ["https://www.blueberryultra.com"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
