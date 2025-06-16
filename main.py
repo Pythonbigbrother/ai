@@ -1,16 +1,21 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 import yt_dlp
-import io
+import os
+import uuid
 
 app = FastAPI()
 
-# Allow all origins for development (adjust for production)
+# CORS for your frontend
+origins = [
+    "https://blueberryultra.com",
+    "http://localhost:3000"  # Optional for local testing
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -18,42 +23,39 @@ app.add_middleware(
 
 class DownloadRequest(BaseModel):
     url: str
-    format: str = "mp4"
+    format: str  # e.g. 'mp4' or 'mp3'
 
 @app.post("/download")
-async def download_video(req: DownloadRequest):
-    video_url = req.url
-    video_format = req.format
+async def download_video(request: DownloadRequest):
+    video_url = request.url
+    video_format = request.format
+    output_filename = f"{uuid.uuid4()}.%(ext)s"
+    
+    ydl_opts = {
+        'format': 'bestvideo+bestaudio/best' if video_format == 'mp4' else 'bestaudio',
+        'outtmpl': output_filename,
+        'quiet': True,
+        'noplaylist': True,
+    }
+
+    if video_format == 'mp3':
+        ydl_opts['postprocessors'] = [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }]
 
     try:
-        buffer = io.BytesIO()
-
-        ydl_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',
-            'outtmpl': '-',  # Stream to stdout
-            'quiet': True,
-            'merge_output_format': 'mp4',
-            'noplaylist': True,
-            'logtostderr': False,
-            'retries': 3,
-            'postprocessors': [{
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': video_format
-            }],
-            'stdout': buffer,
-        }
-
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=False)
-            ydl.download([video_url])
+            info = ydl.download([video_url])
 
-        buffer.seek(0)
-        filename = f"{info['title']}.{video_format}"
-        headers = {
-            "Content-Disposition": f"attachment; filename={filename}"
+        return {
+            "success": True,
+            "message": f"Download completed.",
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
         }
 
-        return StreamingResponse(buffer, media_type="video/mp4", headers=headers)
-
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
