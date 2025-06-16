@@ -12,7 +12,7 @@ app = FastAPI()
 # ✅ Add CORS middleware to allow frontend access
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Change to your domain for security
+    allow_origins=["https://blueberryultra.com"],  # Change to your domain for security
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
