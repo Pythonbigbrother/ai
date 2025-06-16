@@ -1,4 +1,6 @@
 fastapi
 uvicorn
+python-multipart
+aiofiles
 pytube
-yt-dlp
+instaloader
